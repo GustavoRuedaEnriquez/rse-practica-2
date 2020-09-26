@@ -158,7 +158,7 @@ static void thread(void *pvParameters) {
     /* Prepare Tx Frame for sending. */
     txFrame.format = (uint8_t)kFLEXCAN_FrameFormatStandard;
     txFrame.type   = (uint8_t)kFLEXCAN_FrameTypeData;
-    txFrame.id     = FLEXCAN_ID_STD(0x123);
+    txFrame.id     = FLEXCAN_ID_STD(0x256);
     txFrame.length = (uint8_t)DLC;
 #if (defined(USE_CANFD) && USE_CANFD)
     txFrame.brs = 1U;
@@ -249,7 +249,7 @@ int main(void)
     flexcanConfig.clkSrc = EXAMPLE_CAN_CLK_SOURCE;
 #endif
 
-    flexcanConfig.enableLoopBack = true;
+    flexcanConfig.enableLoopBack = false;
 
 #if (defined(USE_IMPROVED_TIMING_CONFIG) && USE_IMPROVED_TIMING_CONFIG)
     flexcan_timing_config_t timing_config;
