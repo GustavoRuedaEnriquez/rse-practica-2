@@ -16,24 +16,19 @@
 #include "fsl_device_registers.h"
 #include "fsl_debug_console.h"
 #include "board.h"
-
 #include "pin_mux.h"
 #include "clock_config.h"
-
 #include "fsl_flexcan.h"
 #include "board.h"
 
-/* Freescale includes. */
-#include "fsl_device_registers.h"
-#include "fsl_debug_console.h"
-#include "board.h"
-
-#include "pin_mux.h"
-#include "clock_config.h"
 
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
+#define P2_CAN_RX_FRAME_ID     0x123
+#define P2_CAN_TX_FRAME_ID     0x256
+#define P2_ENABLE_LOOPBACK     false
+
 #define EXAMPLE_CAN            CAN0
 #define EXAMPLE_CAN_CLK_SOURCE (kFLEXCAN_ClkSrc1)
 #define EXAMPLE_CAN_CLK_FREQ   CLOCK_GetFreq(kCLOCK_BusClk)
@@ -41,6 +36,8 @@
 #define TX_MESSAGE_BUFFER_NUM  (8)
 #define DLC                    (8)
 
+/* Task priorities. */
+#define thread_task_PRIORITY (configMAX_PRIORITIES - 1)
 
 /* To get most precise baud rate under some circumstances, users need to set
    quantum which is composed of PSEG1/PSEG2/PROPSEG. Because CAN clock prescaler
@@ -53,11 +50,16 @@
 #define PSEG1           3
 #define PSEG2           2
 #define PROPSEG         1
+
 /* Fix MISRA_C-2012 Rule 17.7. */
 #define LOG_INFO (void)PRINTF
+
+
 /*******************************************************************************
  * Prototypes
  ******************************************************************************/
+static void thread(void *pvParameters);
+
 
 /*******************************************************************************
  * Variables
@@ -74,16 +76,6 @@ flexcan_frame_t txFrame, rxFrame;
 
 
 /*******************************************************************************
- * Definitions
- ******************************************************************************/
-
-/* Task priorities. */
-#define hello_task_PRIORITY (configMAX_PRIORITIES - 1)
-/*******************************************************************************
- * Prototypes
- ******************************************************************************/
-static void thread(void *pvParameters);
-/*******************************************************************************
  * Code
  ******************************************************************************/
 /*!
@@ -93,9 +85,6 @@ static void thread(void *pvParameters);
 /* Global variables */
 flexcan_config_t flexcanConfig;
 flexcan_rx_mb_config_t mbConfig;
-
-
-
 
 
 static void flexcan_callback(CAN_Type *base, flexcan_handle_t *handle, status_t status, uint32_t result, void *userData)
@@ -109,7 +98,6 @@ static void flexcan_callback(CAN_Type *base, flexcan_handle_t *handle, status_t 
                 rxComplete = true;
             }
             break;
-
         /* Process FlexCAN Tx event. */
         case kStatus_FLEXCAN_TxIdle:
             if (TX_MESSAGE_BUFFER_NUM == result)
@@ -117,7 +105,6 @@ static void flexcan_callback(CAN_Type *base, flexcan_handle_t *handle, status_t 
                 txComplete = true;
             }
             break;
-
         default:
             break;
     }
@@ -125,23 +112,25 @@ static void flexcan_callback(CAN_Type *base, flexcan_handle_t *handle, status_t 
 
 /* thread */
 static void thread(void *pvParameters) {
-    /* Setup Rx Message Buffer. */
+	/* Setup Rx Message Buffer. */
     mbConfig.format = kFLEXCAN_FrameFormatStandard;
     mbConfig.type   = kFLEXCAN_FrameTypeData;
-    mbConfig.id     = FLEXCAN_ID_STD(0x123);
+    mbConfig.id     = FLEXCAN_ID_STD(P2_CAN_RX_FRAME_ID);
+
 #if (defined(USE_CANFD) && USE_CANFD)
     FLEXCAN_SetFDRxMbConfig(EXAMPLE_CAN, RX_MESSAGE_BUFFER_NUM, &mbConfig, true);
 #else
     FLEXCAN_SetRxMbConfig(EXAMPLE_CAN, RX_MESSAGE_BUFFER_NUM, &mbConfig, true);
 #endif
+    /****************************/
 
-/* Setup Tx Message Buffer. */
+
+    /* Setup Tx Message Buffer. */
 #if (defined(USE_CANFD) && USE_CANFD)
     FLEXCAN_SetFDTxMbConfig(EXAMPLE_CAN, TX_MESSAGE_BUFFER_NUM, true);
 #else
     FLEXCAN_SetTxMbConfig(EXAMPLE_CAN, TX_MESSAGE_BUFFER_NUM, true);
 #endif
-
     /* Create FlexCAN handle structure and set call back function. */
     FLEXCAN_TransferCreateHandle(EXAMPLE_CAN, &flexcanHandle, flexcan_callback, NULL);
 
@@ -154,12 +143,15 @@ static void thread(void *pvParameters) {
     rxXfer.frame = &rxFrame;
     (void)FLEXCAN_TransferReceiveNonBlocking(EXAMPLE_CAN, &flexcanHandle, &rxXfer);
 #endif
+    /****************************/
+
 
     /* Prepare Tx Frame for sending. */
     txFrame.format = (uint8_t)kFLEXCAN_FrameFormatStandard;
     txFrame.type   = (uint8_t)kFLEXCAN_FrameTypeData;
-    txFrame.id     = FLEXCAN_ID_STD(0x256);
+    txFrame.id     = FLEXCAN_ID_STD(P2_CAN_TX_FRAME_ID);
     txFrame.length = (uint8_t)DLC;
+
 #if (defined(USE_CANFD) && USE_CANFD)
     txFrame.brs = 1U;
 #endif
@@ -186,6 +178,8 @@ static void thread(void *pvParameters) {
     LOG_INFO("tx word0 = 0x%x\r\n", txFrame.dataWord0);
     LOG_INFO("tx word1 = 0x%x\r\n", txFrame.dataWord1);
 #endif
+    /****************************/
+
 
     /* Send data through Tx Message Buffer. */
     txXfer.mbIdx = (uint8_t)TX_MESSAGE_BUFFER_NUM;
@@ -202,6 +196,8 @@ static void thread(void *pvParameters) {
     while ((!rxComplete) || (!txComplete))
     {
     };
+    /****************************/
+
 
     LOG_INFO("\r\nReceived message from MB%d\r\n", RX_MESSAGE_BUFFER_NUM);
 #if (defined(USE_CANFD) && USE_CANFD)
@@ -215,7 +211,7 @@ static void thread(void *pvParameters) {
 #endif
 
     LOG_INFO("\r\n==FlexCAN loopback example -- Finish.==\r\n");
-    while(1);
+    while(true);
 }
 
 /*!
@@ -228,7 +224,7 @@ int main(void)
     BOARD_BootClockRUN();
     BOARD_InitDebugConsole();
 
-    LOG_INFO("\r\n==FlexCAN loopback example -- Start.==\r\n\r\n");
+    LOG_INFO("\r\n==Practice 2 -- CAN.==\r\n\r\n");
 
     /* Init FlexCAN module. */
     /*
@@ -248,8 +244,7 @@ int main(void)
 #if defined(EXAMPLE_CAN_CLK_SOURCE)
     flexcanConfig.clkSrc = EXAMPLE_CAN_CLK_SOURCE;
 #endif
-
-    flexcanConfig.enableLoopBack = false;
+    flexcanConfig.enableLoopBack = P2_ENABLE_LOOPBACK;
 
 #if (defined(USE_IMPROVED_TIMING_CONFIG) && USE_IMPROVED_TIMING_CONFIG)
     flexcan_timing_config_t timing_config;
@@ -284,17 +279,12 @@ int main(void)
     FLEXCAN_Init(EXAMPLE_CAN, &flexcanConfig, EXAMPLE_CAN_CLK_FREQ);
 #endif
 
-    if (xTaskCreate(thread, "Thread", configMINIMAL_STACK_SIZE + 100, NULL, hello_task_PRIORITY, NULL) !=
-        1)
+    if (xTaskCreate(thread,"Thread",configMINIMAL_STACK_SIZE + 100,NULL,thread_task_PRIORITY,NULL) != 1)
     {
         PRINTF("Task creation failed!.\r\n");
-        while (1)
-            ;
+        while (true);
     }
     vTaskStartScheduler();
 
-
-    while (true)
-    {
-    }
+    while (true);
 }
