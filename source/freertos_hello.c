@@ -26,8 +26,8 @@
  * Definitions
  ******************************************************************************/
 #define P2_CAN_RX_FRAME_ID     0x123
-#define P2_CAN_TX_FRAME_ID     0x256
-#define P2_ENABLE_LOOPBACK     false
+#define P2_CAN_TX_FRAME_ID     0x123
+#define P2_ENABLE_LOOPBACK     true
 
 #define EXAMPLE_CAN            CAN0
 #define EXAMPLE_CAN_CLK_SOURCE (kFLEXCAN_ClkSrc1)
@@ -58,7 +58,8 @@
 /*******************************************************************************
  * Prototypes
  ******************************************************************************/
-static void thread(void *pvParameters);
+static void thread_receive(void *pvParameters);
+static void thread_send_10_millis(void *pvParameters);
 
 
 /*******************************************************************************
@@ -110,41 +111,61 @@ static void flexcan_callback(CAN_Type *base, flexcan_handle_t *handle, status_t 
     }
 }
 
-/* thread */
-static void thread(void *pvParameters) {
+/* receive thread */
+static void thread_receive(void *pvParameters) {
 	/* Setup Rx Message Buffer. */
     mbConfig.format = kFLEXCAN_FrameFormatStandard;
     mbConfig.type   = kFLEXCAN_FrameTypeData;
     mbConfig.id     = FLEXCAN_ID_STD(P2_CAN_RX_FRAME_ID);
 
-#if (defined(USE_CANFD) && USE_CANFD)
-    FLEXCAN_SetFDRxMbConfig(EXAMPLE_CAN, RX_MESSAGE_BUFFER_NUM, &mbConfig, true);
-#else
-    FLEXCAN_SetRxMbConfig(EXAMPLE_CAN, RX_MESSAGE_BUFFER_NUM, &mbConfig, true);
-#endif
-    /****************************/
+	#if (defined(USE_CANFD) && USE_CANFD)
+    	FLEXCAN_SetFDRxMbConfig(EXAMPLE_CAN, RX_MESSAGE_BUFFER_NUM, &mbConfig, true);
+	#else
+    	FLEXCAN_SetRxMbConfig(EXAMPLE_CAN, RX_MESSAGE_BUFFER_NUM, &mbConfig, true);
+	#endif
 
+    while(true)
+    {
+    	/* Start receive data through Rx Message Buffer. */
+    	rxXfer.mbIdx = (uint8_t)RX_MESSAGE_BUFFER_NUM;
+    	#if (defined(USE_CANFD) && USE_CANFD)
+    		rxXfer.framefd = &rxFrame;
+    	    (void)FLEXCAN_TransferFDReceiveNonBlocking(EXAMPLE_CAN, &flexcanHandle, &rxXfer);
+    	#else
+    	   	rxXfer.frame = &rxFrame;
+    	   	(void)FLEXCAN_TransferReceiveNonBlocking(EXAMPLE_CAN, &flexcanHandle, &rxXfer);
+    	#endif
+    	/* Waiting for Rx Message finish. */
+    	while (!rxComplete);
+
+    	LOG_INFO("\r\nReceived message from MB%d\r\n", RX_MESSAGE_BUFFER_NUM);
+    	#if (defined(USE_CANFD) && USE_CANFD)
+    	    for (i = 0; i < DWORD_IN_MB; i++)
+    	    {
+    	        LOG_INFO("rx word%d = 0x%x\r\n", i, rxFrame.dataWord[i]);
+    	    }
+    	#else
+    	    LOG_INFO("rx word0 = 0x%x\r\n", rxFrame.dataWord0);
+    	    LOG_INFO("rx word1 = 0x%x\r\n", rxFrame.dataWord1);
+    	#endif
+    }
+}
+
+/* send thread */
+static void thread_send_10_millis(void *pvParameters)
+{
+	TickType_t xLastWakeTime;
+	xLastWakeTime = xTaskGetTickCount();
 
     /* Setup Tx Message Buffer. */
-#if (defined(USE_CANFD) && USE_CANFD)
-    FLEXCAN_SetFDTxMbConfig(EXAMPLE_CAN, TX_MESSAGE_BUFFER_NUM, true);
-#else
-    FLEXCAN_SetTxMbConfig(EXAMPLE_CAN, TX_MESSAGE_BUFFER_NUM, true);
-#endif
-    /* Create FlexCAN handle structure and set call back function. */
+	#if (defined(USE_CANFD) && USE_CANFD)
+		FLEXCAN_SetFDTxMbConfig(EXAMPLE_CAN, TX_MESSAGE_BUFFER_NUM, true);
+	#else
+		FLEXCAN_SetTxMbConfig(EXAMPLE_CAN, TX_MESSAGE_BUFFER_NUM, true);
+	#endif
+
+	/* Create FlexCAN handle structure and set call back function. */
     FLEXCAN_TransferCreateHandle(EXAMPLE_CAN, &flexcanHandle, flexcan_callback, NULL);
-
-    /* Start receive data through Rx Message Buffer. */
-    rxXfer.mbIdx = (uint8_t)RX_MESSAGE_BUFFER_NUM;
-#if (defined(USE_CANFD) && USE_CANFD)
-    rxXfer.framefd = &rxFrame;
-    (void)FLEXCAN_TransferFDReceiveNonBlocking(EXAMPLE_CAN, &flexcanHandle, &rxXfer);
-#else
-    rxXfer.frame = &rxFrame;
-    (void)FLEXCAN_TransferReceiveNonBlocking(EXAMPLE_CAN, &flexcanHandle, &rxXfer);
-#endif
-    /****************************/
-
 
     /* Prepare Tx Frame for sending. */
     txFrame.format = (uint8_t)kFLEXCAN_FrameFormatStandard;
@@ -152,67 +173,52 @@ static void thread(void *pvParameters) {
     txFrame.id     = FLEXCAN_ID_STD(P2_CAN_TX_FRAME_ID);
     txFrame.length = (uint8_t)DLC;
 
-#if (defined(USE_CANFD) && USE_CANFD)
-    txFrame.brs = 1U;
-#endif
-#if (defined(USE_CANFD) && USE_CANFD)
-    uint8_t i = 0;
-    for (i = 0; i < DWORD_IN_MB; i++)
-    {
-        txFrame.dataWord[i] = i;
-    }
-#else
-    txFrame.dataWord0 = CAN_WORD0_DATA_BYTE_0(0x11) | CAN_WORD0_DATA_BYTE_1(0x22) | CAN_WORD0_DATA_BYTE_2(0x33) |
-                        CAN_WORD0_DATA_BYTE_3(0x44);
-    txFrame.dataWord1 = CAN_WORD1_DATA_BYTE_4(0x55) | CAN_WORD1_DATA_BYTE_5(0x66) | CAN_WORD1_DATA_BYTE_6(0x77) |
-                        CAN_WORD1_DATA_BYTE_7(0x88);
-#endif
+	#if (defined(USE_CANFD) && USE_CANFD)
+    	txFrame.brs = 1U;
+	#endif
+	#if (defined(USE_CANFD) && USE_CANFD)
+    	uint8_t i = 0;
+    	for (i = 0; i < DWORD_IN_MB; i++)
+    	{
+    		txFrame.dataWord[i] = i;
+    	}
+	#else
+    	txFrame.dataWord0 = CAN_WORD0_DATA_BYTE_0(0x11) | CAN_WORD0_DATA_BYTE_1(0x22) | CAN_WORD0_DATA_BYTE_2(0x33) |
+    						CAN_WORD0_DATA_BYTE_3(0x44);
+    	txFrame.dataWord1 = CAN_WORD1_DATA_BYTE_4(0x55) | CAN_WORD1_DATA_BYTE_5(0x66) | CAN_WORD1_DATA_BYTE_6(0x77) |
+    						CAN_WORD1_DATA_BYTE_7(0x88);
+	#endif
 
     LOG_INFO("Send message from MB%d to MB%d\r\n", TX_MESSAGE_BUFFER_NUM, RX_MESSAGE_BUFFER_NUM);
-#if (defined(USE_CANFD) && USE_CANFD)
-    for (i = 0; i < DWORD_IN_MB; i++)
-    {
-        LOG_INFO("tx word%d = 0x%x\r\n", i, txFrame.dataWord[i]);
+	#if (defined(USE_CANFD) && USE_CANFD)
+    	for (i = 0; i < DWORD_IN_MB; i++)
+    	{
+    		LOG_INFO("tx word%d = 0x%x\r\n", i, txFrame.dataWord[i]);
+    	}
+	#else
+    	LOG_INFO("tx word0 = 0x%x\r\n", txFrame.dataWord0);
+    	LOG_INFO("tx word1 = 0x%x\r\n", txFrame.dataWord1);
+	#endif
+
+    while(true) {
+        /* Send data through Tx Message Buffer. */
+        txXfer.mbIdx = (uint8_t)TX_MESSAGE_BUFFER_NUM;
+    	#if (defined(USE_CANFD) && USE_CANFD)
+        	txXfer.framefd = &txFrame;
+        	(void)FLEXCAN_TransferFDSendNonBlocking(EXAMPLE_CAN, &flexcanHandle, &txXfer);
+		#else
+        	txXfer.frame = &txFrame;
+        	(void)FLEXCAN_TransferSendNonBlocking(EXAMPLE_CAN, &flexcanHandle, &txXfer);
+    	#endif
+
+        /* Waiting for Rx Message finish. */
+        while ((!txComplete))
+        {
+        };
+        vTaskDelayUntil(&xLastWakeTime, (10 / portTICK_PERIOD_MS));
     }
-#else
-    LOG_INFO("tx word0 = 0x%x\r\n", txFrame.dataWord0);
-    LOG_INFO("tx word1 = 0x%x\r\n", txFrame.dataWord1);
-#endif
-    /****************************/
-
-
-    /* Send data through Tx Message Buffer. */
-    txXfer.mbIdx = (uint8_t)TX_MESSAGE_BUFFER_NUM;
-#if (defined(USE_CANFD) && USE_CANFD)
-    txXfer.framefd = &txFrame;
-    (void)FLEXCAN_TransferFDSendNonBlocking(EXAMPLE_CAN, &flexcanHandle, &txXfer);
-#else
-    txXfer.frame = &txFrame;
-    (void)FLEXCAN_TransferSendNonBlocking(EXAMPLE_CAN, &flexcanHandle, &txXfer);
-#endif
-
-
-    /* Waiting for Rx Message finish. */
-    while ((!rxComplete) || (!txComplete))
-    {
-    };
-    /****************************/
-
-
-    LOG_INFO("\r\nReceived message from MB%d\r\n", RX_MESSAGE_BUFFER_NUM);
-#if (defined(USE_CANFD) && USE_CANFD)
-    for (i = 0; i < DWORD_IN_MB; i++)
-    {
-        LOG_INFO("rx word%d = 0x%x\r\n", i, rxFrame.dataWord[i]);
-    }
-#else
-    LOG_INFO("rx word0 = 0x%x\r\n", rxFrame.dataWord0);
-    LOG_INFO("rx word1 = 0x%x\r\n", rxFrame.dataWord1);
-#endif
-
-    LOG_INFO("\r\n==FlexCAN loopback example -- Finish.==\r\n");
-    while(true);
 }
+
 
 /*!
  * @brief Main function
@@ -279,11 +285,18 @@ int main(void)
     FLEXCAN_Init(EXAMPLE_CAN, &flexcanConfig, EXAMPLE_CAN_CLK_FREQ);
 #endif
 
-    if (xTaskCreate(thread,"Thread",configMINIMAL_STACK_SIZE + 100,NULL,thread_task_PRIORITY,NULL) != 1)
+    if (xTaskCreate(thread_receive,"Thread_receive",configMINIMAL_STACK_SIZE + 100,NULL,thread_task_PRIORITY - 1,NULL) != 1)
     {
         PRINTF("Task creation failed!.\r\n");
         while (true);
     }
+
+    if (xTaskCreate(thread_send_10_millis,"Thread_10_millis",configMINIMAL_STACK_SIZE + 100,NULL,thread_task_PRIORITY,NULL) != 1)
+    {
+        PRINTF("Task creation failed!.\r\n");
+        while (true);
+    }
+
     vTaskStartScheduler();
 
     while (true);
